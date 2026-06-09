@@ -4,6 +4,16 @@ import { getAdapter } from '../adapters';
 
 const GROUP_COLORS = ['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan'] as const;
 
+/** Only http(s) URLs are safe to open as tabs; reject javascript:, data:, file:, etc. */
+function isSafeWebUrl(url: string): boolean {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === 'https:' || protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
 export interface TabManagerOptions {
   groupTitle: string;
   adapterName: string;
@@ -78,6 +88,12 @@ export class TabManager {
         if (existingTab) {
           tabsToAdd.push(existingTab.id!);
         } else {
+          // Only open http(s) URLs. API responses drive tab creation, so reject
+          // anything else (javascript:, data:, file:, etc.) before navigating.
+          if (!isSafeWebUrl(item.url)) {
+            console.warn(`[Auto Groups] Skipping item with unsafe URL: ${item.url}`);
+            continue;
+          }
           const newTab = await browser.tabs.create({ url: item.url, active: false });
           tabsToAdd.push(newTab.id!);
         }

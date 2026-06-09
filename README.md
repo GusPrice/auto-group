@@ -113,3 +113,25 @@ export const availableAdapters = {
 - `storage` - Store adapter configurations
 - `alarms` - Schedule periodic polling
 - `https://api.github.com/` - Access GitHub API
+- `https://*/*` (optional) - Requested only when you configure a custom GitHub Enterprise host
+
+## Security
+
+- **Use a minimally-scoped, expiring token.** The GitHub integration only needs
+  read access to pull requests where you're a requested reviewer. Prefer a
+  [fine-grained personal access token](https://github.com/settings/tokens?type=beta)
+  with read-only **Pull requests** access and a short expiry. Avoid classic
+  tokens with broad `repo` scope.
+- **Token storage.** Your token is stored in the browser's extension-local
+  storage (`browser.storage.local`) so it can be used for background polling.
+  Like all extension storage this is unencrypted at rest, so only install on a
+  machine you trust, and revoke the token in GitHub settings if you uninstall.
+- **Custom hosts.** If you point the extension at a custom/Enterprise host, your
+  token is sent to that host as an authorization credential. The extension
+  validates the URL and asks you to confirm before sending — only use hosts you
+  trust.
+- **Dependency audit.** `npm audit` currently reports advisories, but they all
+  originate from build/dev tooling (`wxt` → `web-ext-run` → `tmp`/`fx-runner`/
+  `node-notifier`) that is **not bundled into the shipped extension**. The
+  project already tracks the latest `wxt`; these will clear when the upstream
+  toolchain updates its transitive dependencies.

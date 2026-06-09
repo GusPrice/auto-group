@@ -38,14 +38,18 @@ export async function fetchRequestedPRs(): Promise<PullRequest[]> {
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
+    // Read the body for diagnostics only — log it, but do not surface the raw
+    // response into user-facing error text (avoids reflecting unexpected
+    // content from a custom/enterprise host back into the UI).
+    const errorText = await response.text().catch(() => '');
+    console.error(`[Auto Groups] GitHub API error ${response.status}:`, errorText);
     if (response.status === 401) {
       throw new Error('Invalid GitHub token');
     }
     if (response.status === 403) {
       throw new Error('Rate limit exceeded. Please try again later.');
     }
-    throw new Error(`GitHub API error: ${response.status} - ${errorText}`);
+    throw new Error(`GitHub API error: ${response.status}`);
   }
 
   const data = await response.json();
