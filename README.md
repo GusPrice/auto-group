@@ -5,7 +5,7 @@ A browser extension that automatically manages tab groups based on external APIs
 ## Features
 
 - **Modular Adapter Architecture** - Easily add new integrations (GitHub, GitLab, Jira, etc.)
-- **GitHub Integration** - Track PRs where you're a requested reviewer
+- **GitHub Integration** - Track your open PRs and PRs awaiting your review in one tab group
 - **Automatic Tab Grouping** - Creates and manages tab groups seamlessly
 - **Configurable Polling** - Set sync intervals (1, 5, 10, or 30 minutes)
 - **Two Fetch Modes**:

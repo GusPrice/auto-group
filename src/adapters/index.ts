@@ -11,8 +11,8 @@ export const adapterRegistry: AdapterRegistry = {
 export const availableAdapters: AvailableAdapters = {
   github: {
     name: 'github',
-    groupTitle: '🔄 GitHub Reviews',
-    description: 'Track PRs where you are a requested reviewer',
+    groupTitle: '🔄 GitHub PRs',
+    description: 'Track your open PRs and PRs awaiting your review',
   },
 };
 

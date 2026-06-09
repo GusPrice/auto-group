@@ -17,16 +17,7 @@ async function getGithubConfig(): Promise<{ token: string | null; host: string }
   };
 }
 
-export async function fetchRequestedPRs(): Promise<PullRequest[]> {
-  const { token, host } = await getGithubConfig();
-  if (!token) {
-    throw new Error('GitHub token not configured');
-  }
-
-  const query = 'state:open is:pr user-review-requested:@me';
-  const cleanHost = host.replace(/\/$/, '');
-  const isEnterprise = cleanHost !== 'https://api.github.com' && !cleanHost.includes('api.github.com');
-  const baseUrl = isEnterprise ? `${cleanHost}/api/v3` : cleanHost;
+async function searchPRs(baseUrl: string, token: string, query: string): Promise<PullRequest[]> {
   const url = `${baseUrl}/search/issues?q=${encodeURIComponent(query)}&sort=updated&per_page=50`;
 
   const response = await fetch(url, {
@@ -53,7 +44,32 @@ export async function fetchRequestedPRs(): Promise<PullRequest[]> {
   }
 
   const data = await response.json();
-  return data.items;
+  return (data.items ?? []) as PullRequest[];
+}
+
+export async function fetchTrackedPRs(): Promise<PullRequest[]> {
+  const { token, host } = await getGithubConfig();
+  if (!token) {
+    throw new Error('GitHub token not configured');
+  }
+
+  const cleanHost = host.replace(/\/$/, '');
+  const isEnterprise = cleanHost !== 'https://api.github.com' && !cleanHost.includes('api.github.com');
+  const baseUrl = isEnterprise ? `${cleanHost}/api/v3` : cleanHost;
+
+  // GitHub search can't OR these qualifiers in one query, so fetch your open
+  // PRs and the open PRs awaiting your review separately, then merge + dedupe.
+  // Drafts are included (no draft:false qualifier); only open PRs are returned.
+  const [authored, reviewRequested] = await Promise.all([
+    searchPRs(baseUrl, token, 'state:open is:pr author:@me'),
+    searchPRs(baseUrl, token, 'state:open is:pr user-review-requested:@me'),
+  ]);
+
+  const byId = new Map<number, PullRequest>();
+  for (const pr of [...authored, ...reviewRequested]) {
+    byId.set(pr.id, pr);
+  }
+  return Array.from(byId.values());
 }
 
 export async function saveConfig(token: string, host: string): Promise<void> {
@@ -72,8 +88,8 @@ export async function getSavedConfig(): Promise<{ token: string | null; host: st
 
 export const githubAdapter: AdapterWithInstall<PullRequest> = {
   name: 'github',
-  groupTitle: '🔄 GitHub Reviews',
-  description: 'Track PRs where you are a requested reviewer',
+  groupTitle: '🔄 GitHub PRs',
+  description: 'Track your open PRs and PRs awaiting your review',
 
   async install() {
     await setAdapterConfig('github', {
@@ -88,7 +104,7 @@ export const githubAdapter: AdapterWithInstall<PullRequest> = {
   },
 
   async fetchItems() {
-    return fetchRequestedPRs();
+    return fetchTrackedPRs();
   },
 
   getItemUrl(item: PullRequest): string {
