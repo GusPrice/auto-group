@@ -2,7 +2,7 @@
   "name": "auto-groups",
   "description": "Automatically manage Chrome/Firefox tab groups based on external APIs like GitHub PRs",
   "private": true,
-  "version": "1.1.1",
+  "version": "1.2.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
