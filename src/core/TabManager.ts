@@ -15,27 +15,34 @@ function isSafeWebUrl(url: string): boolean {
 }
 
 export interface TabManagerOptions {
+  // Stable, unique identifier for this tab group in storage. A single adapter
+  // can own several groups (e.g. one per repo), so this is distinct from the
+  // adapter name.
+  groupKey: string;
   groupTitle: string;
+  // Used to map tab URLs back to item ids (adapter-specific), and to key lastSync.
   adapterName: string;
 }
 
 export class TabManager {
+  private groupKey: string;
   private groupTitle: string;
   private adapterName: string;
 
   constructor(options: TabManagerOptions) {
+    this.groupKey = options.groupKey;
     this.groupTitle = options.groupTitle;
     this.adapterName = options.adapterName;
   }
 
   async getGroupId(): Promise<number | null> {
     const mapping = await storage.get('groupMapping');
-    return mapping[this.adapterName] || null;
+    return mapping[this.groupKey] || null;
   }
 
   async setGroupId(groupId: number): Promise<void> {
     const mapping = await storage.get('groupMapping');
-    mapping[this.adapterName] = groupId;
+    mapping[this.groupKey] = groupId;
     await storage.set('groupMapping', mapping);
   }
 
@@ -168,11 +175,11 @@ export class TabManager {
       }
 
       const mapping = await storage.get('groupMapping');
-      delete mapping[this.adapterName];
+      delete mapping[this.groupKey];
       await storage.set('groupMapping', mapping);
     } catch {
       const mapping = await storage.get('groupMapping');
-      delete mapping[this.adapterName];
+      delete mapping[this.groupKey];
       await storage.set('groupMapping', mapping);
     }
   }

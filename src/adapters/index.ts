@@ -1,7 +1,7 @@
 import type { AdapterWithInstall, AdapterRegistry, AvailableAdapters, AvailableAdapter } from './types';
 import { githubAdapter } from './github';
 
-export type { AdapterWithInstall, SyncItem, PullRequest, AdapterRegistry, AvailableAdapter, AvailableAdapters } from './types';
+export type { AdapterWithInstall, SyncItem, SyncGroup, PullRequest, AdapterRegistry, AvailableAdapter, AvailableAdapters } from './types';
 export { githubAdapter } from './github';
 
 export const adapterRegistry: AdapterRegistry = {

@@ -1,4 +1,4 @@
-import { getAdapter, getAllAdapters } from '../src/adapters';
+import { getAdapter, getAllAdapters, SyncGroup } from '../src/adapters';
 import { TabManager } from '../src/core/TabManager';
 import { storage, getSettings, getAdapterConfig } from '../src/core/Storage';
 import {
@@ -21,26 +21,59 @@ async function runAdapterSync(adapterName: string): Promise<void> {
     return;
   }
 
-  const tabManager = new TabManager({
-    groupTitle: adapter.groupTitle,
-    adapterName: adapter.name,
-  });
-
   try {
     console.log(`[Auto Groups] Fetching items for ${adapterName}...`);
-    const items = await adapter.fetchItems();
-    console.log(`[Auto Groups] Got ${items.length} items`);
 
-    const syncItems = items.map(item => ({
-      id: adapter.getItemId(item),
-      url: adapter.getItemUrl(item),
-      title: adapter.getItemTitle(item),
-    }));
-
-    await tabManager.syncGroup(syncItems);
-    console.log(`[Auto Groups] Synced ${syncItems.length} items for ${adapterName}`);
+    if (adapter.fetchGroups) {
+      // Multi-group adapter: it decides how items map to tab groups.
+      const groups = await adapter.fetchGroups();
+      await syncAdapterGroups(adapterName, groups);
+    } else {
+      // Single-group adapter: everything goes into one group keyed by name.
+      const items = await adapter.fetchItems();
+      const syncItems = items.map(item => ({
+        id: adapter.getItemId(item),
+        url: adapter.getItemUrl(item),
+        title: adapter.getItemTitle(item),
+      }));
+      const tabManager = new TabManager({
+        groupKey: adapter.name,
+        groupTitle: adapter.groupTitle,
+        adapterName: adapter.name,
+      });
+      await tabManager.syncGroup(syncItems);
+      console.log(`[Auto Groups] Synced ${syncItems.length} items for ${adapterName}`);
+    }
   } catch (error) {
     console.error(`[Auto Groups] Error syncing ${adapterName}:`, error);
+  }
+}
+
+async function syncAdapterGroups(adapterName: string, groups: SyncGroup[]): Promise<void> {
+  console.log(`[Auto Groups] ${adapterName}: syncing ${groups.length} group(s)`);
+
+  // Sync the current groups first so tabs can be moved/reused between groups
+  // before any stale groups are torn down.
+  for (const group of groups) {
+    const tabManager = new TabManager({
+      groupKey: group.key,
+      groupTitle: group.title,
+      adapterName,
+    });
+    await tabManager.syncGroup(group.items);
+  }
+
+  // Remove groups this adapter previously owned that no longer apply: a repo
+  // with no open PRs, a category that emptied out, or the legacy single
+  // combined group (keyed by the bare adapter name).
+  const currentKeys = new Set(groups.map(g => g.key));
+  const mapping = await storage.get('groupMapping');
+  for (const key of Object.keys(mapping)) {
+    const ownedByAdapter = key === adapterName || key.startsWith(`${adapterName}:`);
+    if (ownedByAdapter && !currentKeys.has(key)) {
+      const tabManager = new TabManager({ groupKey: key, groupTitle: '', adapterName });
+      await tabManager.removeGroup();
+    }
   }
 }
 
