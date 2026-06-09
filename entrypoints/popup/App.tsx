@@ -126,18 +126,47 @@ function App() {
         }
         host = host.replace(/\/api\/v3\/?$/i, '');
         host = host.replace(/\/+$/, '');
+
+        // Validate the host is a well-formed https origin before we ever send
+        // the token to it. The token is transmitted as a Bearer credential to
+        // this host, so a malformed/unexpected value must not slip through.
+        let parsed: URL;
+        try {
+          parsed = new URL(host);
+        } catch {
+          setError('Invalid GitHub host URL.');
+          return false;
+        }
+        if (parsed.protocol !== 'https:') {
+          setError('GitHub host must use https://.');
+          return false;
+        }
+        if (!parsed.hostname || parsed.username || parsed.password) {
+          setError('GitHub host must be a plain https origin without credentials.');
+          return false;
+        }
+        // Normalize to scheme + host (+ explicit port) only — drop any path/query.
+        host = parsed.origin;
       }
 
-      // If it's a custom host, request permissions
+      // If it's a custom host, warn that the token will be sent there, then request permissions.
       if (host && host !== 'https://api.github.com') {
-        // Remove trailing slash for permission request just in case, but origins usually need it
+        const confirmed = window.confirm(
+          `Your GitHub token will be sent as an authorization credential to:\n\n${host}\n\n` +
+          `Only continue if you trust this host. Proceed?`
+        );
+        if (!confirmed) {
+          setError('Cancelled: token was not sent to the custom host.');
+          return false;
+        }
+
         const origin = `${host}/*`;
-        
+
         try {
           const granted = await browser.permissions.request({
             origins: [origin]
           });
-          
+
           if (!granted) {
             setError('Permission denied for custom host. You must grant permission to access the enterprise URL.');
             return false;
@@ -289,14 +318,10 @@ function InstalledTab({
   onSyncNow: () => void;
   saving: boolean;
 }) {
-  const [tokenInput, setTokenInput] = useState<Record<string, string>>(() => {
-    try {
-      const saved = localStorage.getItem('draftTokenInput');
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  });
+  // The token is a secret and is intentionally kept in memory only — never
+  // persisted to localStorage (which is plaintext and survives across
+  // sessions/updates). Only the non-sensitive host field is drafted to disk.
+  const [tokenInput, setTokenInput] = useState<Record<string, string>>({});
   const [hostInput, setHostInput] = useState<Record<string, string>>(() => {
     try {
       const saved = localStorage.getItem('draftHostInput');
@@ -306,9 +331,10 @@ function InstalledTab({
     }
   });
 
+  // Clean up any token draft left behind by older versions of the extension.
   useEffect(() => {
-    localStorage.setItem('draftTokenInput', JSON.stringify(tokenInput));
-  }, [tokenInput]);
+    localStorage.removeItem('draftTokenInput');
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('draftHostInput', JSON.stringify(hostInput));

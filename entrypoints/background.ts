@@ -151,7 +151,9 @@ export default defineBackground(() => {
 
     if (message.type === 'UPDATE_ADAPTER_CONFIG') {
       const { adapterName, enabled, pollingInterval, config } = message;
-      console.log('[Auto Groups] UPDATE_ADAPTER_CONFIG:', { adapterName, enabled, pollingInterval, config });
+      const redactConfig = (c: Record<string, any> | undefined) =>
+        c && 'token' in c ? { ...c, token: c.token ? '[redacted]' : c.token } : c;
+      console.log('[Auto Groups] UPDATE_ADAPTER_CONFIG:', { adapterName, enabled, pollingInterval, config: redactConfig(config) });
       getAdapterConfig(adapterName).then(currentConfig => {
         if (currentConfig) {
           storage.get('installedAdapters').then(adapters => {
@@ -160,7 +162,7 @@ export default defineBackground(() => {
               pollingInterval: pollingInterval !== undefined ? pollingInterval : currentConfig.pollingInterval,
               config: { ...currentConfig.config, ...config },
             };
-            console.log('[Auto Groups] New config:', newConfig);
+            console.log('[Auto Groups] New config:', { ...newConfig, config: redactConfig(newConfig.config) });
             storage.set('installedAdapters', {
               ...adapters,
               [adapterName]: newConfig,
