@@ -8,7 +8,27 @@ import {
   updatePolling
 } from '../src/core/Scheduler';
 
+// Serialize sync runs per adapter so overlapping triggers (manual SYNC_NOW,
+// master alarm, individual alarm) don't double-create tabs by reading state
+// before a concurrent run has finished creating its tabs.
+const adapterSyncLocks = new Map<string, Promise<void>>();
+
 async function runAdapterSync(adapterName: string): Promise<void> {
+  const pending = adapterSyncLocks.get(adapterName) ?? Promise.resolve();
+  const next = pending
+    .catch(() => {}) // don't let a prior failure reject the chain
+    .then(() => runAdapterSyncInner(adapterName));
+  adapterSyncLocks.set(adapterName, next);
+  try {
+    await next;
+  } finally {
+    if (adapterSyncLocks.get(adapterName) === next) {
+      adapterSyncLocks.delete(adapterName);
+    }
+  }
+}
+
+async function runAdapterSyncInner(adapterName: string): Promise<void> {
   const adapter = getAdapter(adapterName);
   if (!adapter) {
     console.error(`Adapter not found: ${adapterName}`);

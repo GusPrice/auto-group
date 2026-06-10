@@ -88,21 +88,30 @@ export class TabManager {
     const existingItemIds = new Set(
       managedTabs.map(t => t.url ? this.extractItemId(t.url) : null).filter((id): id is string => !!id)
     );
+    const seenItemIds = new Set(existingItemIds); // ids already in the group
+    const queuedTabIds = new Set<number>();
 
     for (const item of items) {
-      if (!existingItemIds.has(item.id)) {
-        const existingTab = allTabs.find(t => t.url && this.extractItemId(t.url) === item.id);
-        if (existingTab) {
-          tabsToAdd.push(existingTab.id!);
-        } else {
-          // Only open http(s) URLs. API responses drive tab creation, so reject
-          // anything else (javascript:, data:, file:, etc.) before navigating.
-          if (!isSafeWebUrl(item.url)) {
-            console.warn(`[Auto Groups] Skipping item with unsafe URL: ${item.url}`);
-            continue;
-          }
-          const newTab = await browser.tabs.create({ url: item.url, active: false });
-          tabsToAdd.push(newTab.id!);
+      if (seenItemIds.has(item.id)) continue; // already in group OR handled this pass
+      seenItemIds.add(item.id);
+
+      const existingTab = allTabs.find(t => t.url && this.extractItemId(t.url) === item.id);
+      if (existingTab?.id !== undefined) {
+        if (!queuedTabIds.has(existingTab.id)) {
+          tabsToAdd.push(existingTab.id);
+          queuedTabIds.add(existingTab.id);
+        }
+      } else {
+        // Only open http(s) URLs. API responses drive tab creation, so reject
+        // anything else (javascript:, data:, file:, etc.) before navigating.
+        if (!isSafeWebUrl(item.url)) {
+          console.warn(`[Auto Groups] Skipping item with unsafe URL: ${item.url}`);
+          continue;
+        }
+        const newTab = await browser.tabs.create({ url: item.url, active: false });
+        if (newTab.id !== undefined) {
+          tabsToAdd.push(newTab.id);
+          queuedTabIds.add(newTab.id);
         }
       }
     }
@@ -121,7 +130,7 @@ export class TabManager {
         const groupTabs = await browser.tabs.query({ groupId: groupId });
         const currentTabIds = groupTabs.map(t => t.id).filter((id): id is number => id !== undefined);
         if (currentTabIds.length > 0) {
-          const allTabIds = [...currentTabIds, ...tabsToAdd];
+          const allTabIds = [...new Set([...currentTabIds, ...tabsToAdd])];
           await browser.tabs.group({ tabIds: allTabIds as [number, ...number[]], groupId: groupId });
         } else {
           await browser.tabs.group({ tabIds: tabsToAdd as [number, ...number[]], groupId: groupId });
