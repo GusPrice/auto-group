@@ -14,6 +14,9 @@ A browser extension that automatically manages tab groups based on external APIs
 
 ## Installation
 
+> New here? See **[SETUP.md](./SETUP.md)** for a step-by-step Chrome guide,
+> including how to create the right GitHub token.
+
 ### Chrome
 1. Build the extension: `npm run build`
 2. Open `chrome://extensions/`
