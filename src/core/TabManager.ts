@@ -62,6 +62,25 @@ export class TabManager {
       }
     }
 
+    // If storage lost track of our group (extension reload / new id, cleared
+    // storage, or an MV3 service-worker restart that defeated the in-memory
+    // sync lock), adopt an existing group with the same title in this window
+    // instead of creating a duplicate. Any leftover duplicate groups get their
+    // tabs consolidated into this one below and are then emptied, so Chrome
+    // removes them.
+    let adoptedExisting = false;
+    if (!groupId) {
+      const sameTitle = await browser.tabGroups.query({
+        windowId: currentWindow.id,
+        title: this.groupTitle,
+      });
+      if (sameTitle.length > 0) {
+        groupId = sameTitle[0].id;
+        adoptedExisting = true;
+        await this.setGroupId(groupId);
+      }
+    }
+
     const allTabs = await browser.tabs.query({ windowId: currentWindow.id });
     const managedTabs: browser.tabs.Tab[] = [];
 
@@ -135,14 +154,17 @@ export class TabManager {
         } else {
           await browser.tabs.group({ tabIds: tabsToAdd as [number, ...number[]], groupId: groupId });
         }
-        await browser.tabGroups.update(groupId, { title: this.groupTitle });
+        // Reapply our color the first time we adopt an existing group; once we
+        // own it, leave the color alone so a manual recolor is preserved.
+        await browser.tabGroups.update(groupId, {
+          title: this.groupTitle,
+          ...(adoptedExisting ? { color: this.colorForGroup() } : {}),
+        });
       } else {
         const newGroupId = await browser.tabs.group({ tabIds: tabsToAdd as [number, ...number[]] });
-        const mapping = await storage.get('groupMapping');
-        const colorIndex = Object.keys(mapping).length % GROUP_COLORS.length;
         await browser.tabGroups.update(newGroupId, {
           title: this.groupTitle,
-          color: GROUP_COLORS[colorIndex],
+          color: this.colorForGroup(),
         });
         await this.setGroupId(newGroupId);
       }
@@ -151,6 +173,17 @@ export class TabManager {
     const lastSync = await storage.get('lastSync');
     lastSync[this.adapterName] = Date.now();
     await storage.set('lastSync', lastSync);
+  }
+
+  // Deterministic color per group so it stays stable across reloads and does
+  // not depend on the order groups happen to be created in (which previously
+  // made the first group always grey).
+  private colorForGroup(): (typeof GROUP_COLORS)[number] {
+    let hash = 0;
+    for (let i = 0; i < this.groupKey.length; i++) {
+      hash = (hash * 31 + this.groupKey.charCodeAt(i)) | 0;
+    }
+    return GROUP_COLORS[Math.abs(hash) % GROUP_COLORS.length];
   }
 
   private extractItemId(url: string): string | null {
