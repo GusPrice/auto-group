@@ -47,72 +47,70 @@ export class TabManager {
   }
 
   async syncGroup(items: SyncItem[]): Promise<void> {
-    const currentWindow = await browser.windows.getCurrent();
-    if (!currentWindow.id) return;
-
     const itemIds = new Set(items.map(item => item.id));
-    let existingGroupId = await this.getGroupId();
-    let groupId = existingGroupId;
 
-    if (groupId) {
+    // Validate the group id on record, if any.
+    let storedGroupId = await this.getGroupId();
+    if (storedGroupId) {
       try {
-        await browser.tabGroups.get(groupId);
+        await browser.tabGroups.get(storedGroupId);
       } catch {
-        groupId = null;
+        storedGroupId = null;
       }
     }
 
-    // If storage lost track of our group (extension reload / new id, cleared
-    // storage, or an MV3 service-worker restart that defeated the in-memory
-    // sync lock), adopt an existing group with the same title in this window
-    // instead of creating a duplicate. Any leftover duplicate groups get their
-    // tabs consolidated into this one below and are then emptied, so Chrome
-    // removes them.
-    let adoptedExisting = false;
-    if (!groupId) {
-      const sameTitle = await browser.tabGroups.query({
-        windowId: currentWindow.id,
-        title: this.groupTitle,
-      });
-      if (sameTitle.length > 0) {
-        groupId = sameTitle[0].id;
-        adoptedExisting = true;
-        await this.setGroupId(groupId);
-      }
+    // Find every group (in any window) carrying our title: our group plus any
+    // accidental duplicates created by races or by an earlier version syncing
+    // against the wrong window. We collapse them all into one canonical group
+    // below, so duplicates self-heal.
+    const titleGroups = await browser.tabGroups.query({ title: this.groupTitle });
+
+    // Canonical group: prefer the one we already own, otherwise any match.
+    const canonical = titleGroups.find(g => g.id === storedGroupId) ?? titleGroups[0] ?? null;
+    const canonicalId = canonical ? canonical.id : null;
+    const takingOwnership = canonicalId !== null && canonicalId !== storedGroupId;
+
+    // Anchor work to the group's own window — never browser.windows.getCurrent(),
+    // which is unreliable in a service worker and, with multiple windows open,
+    // caused tabs to be created in one window and grouped into another.
+    let windowId: number | undefined = canonical?.windowId;
+    if (windowId === undefined) {
+      const focused = await browser.windows
+        .getLastFocused({ windowTypes: ['normal'] })
+        .catch(() => null);
+      windowId = focused?.id ?? (await browser.windows.getCurrent()).id;
     }
+    if (windowId === undefined) return;
 
-    const allTabs = await browser.tabs.query({ windowId: currentWindow.id });
-    const managedTabs: browser.tabs.Tab[] = [];
+    // Managed tabs = tabs in any title-matched group (across windows), so
+    // duplicate groups are absorbed rather than left behind.
+    const titleGroupIds = new Set(titleGroups.map(g => g.id));
+    const allTabs = await browser.tabs.query({});
+    const managedTabs = allTabs.filter(t => t.groupId !== undefined && titleGroupIds.has(t.groupId));
 
-    if (groupId) {
-      for (const tab of allTabs) {
-        if (tab.groupId === groupId) {
-          managedTabs.push(tab);
-        }
-      }
-    }
-
+    // Keep one tab per current item id; drop stale PRs and duplicate tabs.
     const tabsToRemove: number[] = [];
-
+    const keptItemIds = new Set<string>();
+    const keepTabIds: number[] = [];
     for (const tab of managedTabs) {
-      if (tab.url) {
-        const itemId = this.extractItemId(tab.url);
-        if (itemId && !itemIds.has(itemId)) {
-          tabsToRemove.push(tab.id!);
-        }
+      const itemId = tab.url ? this.extractItemId(tab.url) : null;
+      if (!itemId) continue; // leave unrecognized tabs alone
+      if (!itemIds.has(itemId)) {
+        if (tab.id !== undefined) tabsToRemove.push(tab.id); // stale PR
+      } else if (keptItemIds.has(itemId)) {
+        if (tab.id !== undefined) tabsToRemove.push(tab.id); // duplicate of a kept tab
+      } else {
+        keptItemIds.add(itemId);
+        if (tab.id !== undefined) keepTabIds.push(tab.id);
       }
     }
 
+    // Add tabs for items not already represented by a kept tab.
     const tabsToAdd: number[] = [];
-    const existingItemIds = new Set(
-      managedTabs.map(t => t.url ? this.extractItemId(t.url) : null).filter((id): id is string => !!id)
-    );
-    const seenItemIds = new Set(existingItemIds); // ids already in the group
     const queuedTabIds = new Set<number>();
-
     for (const item of items) {
-      if (seenItemIds.has(item.id)) continue; // already in group OR handled this pass
-      seenItemIds.add(item.id);
+      if (keptItemIds.has(item.id)) continue; // already in group OR handled this pass
+      keptItemIds.add(item.id);
 
       const existingTab = allTabs.find(t => t.url && this.extractItemId(t.url) === item.id);
       if (existingTab?.id !== undefined) {
@@ -127,7 +125,7 @@ export class TabManager {
           console.warn(`[Auto Groups] Skipping item with unsafe URL: ${item.url}`);
           continue;
         }
-        const newTab = await browser.tabs.create({ url: item.url, active: false });
+        const newTab = await browser.tabs.create({ url: item.url, active: false, windowId });
         if (newTab.id !== undefined) {
           tabsToAdd.push(newTab.id);
           queuedTabIds.add(newTab.id);
@@ -140,36 +138,37 @@ export class TabManager {
       await browser.tabs.remove(tabsToRemove);
     }
 
-    if (tabsToAdd.length === 0 && managedTabs.length === 0) {
+    // Every tab that should live in the group: survivors + newly added.
+    // Grouping them all into the canonical group drains any duplicate groups,
+    // which then empty out and are removed by the browser.
+    const finalTabIds = [...new Set([...keepTabIds, ...tabsToAdd])];
+    if (finalTabIds.length === 0) {
+      await this.touchLastSync();
       return;
     }
 
-    if (tabsToAdd.length > 0) {
-      if (groupId) {
-        const groupTabs = await browser.tabs.query({ groupId: groupId });
-        const currentTabIds = groupTabs.map(t => t.id).filter((id): id is number => id !== undefined);
-        if (currentTabIds.length > 0) {
-          const allTabIds = [...new Set([...currentTabIds, ...tabsToAdd])];
-          await browser.tabs.group({ tabIds: allTabIds as [number, ...number[]], groupId: groupId });
-        } else {
-          await browser.tabs.group({ tabIds: tabsToAdd as [number, ...number[]], groupId: groupId });
-        }
-        // Reapply our color the first time we adopt an existing group; once we
-        // own it, leave the color alone so a manual recolor is preserved.
-        await browser.tabGroups.update(groupId, {
-          title: this.groupTitle,
-          ...(adoptedExisting ? { color: this.colorForGroup() } : {}),
-        });
-      } else {
-        const newGroupId = await browser.tabs.group({ tabIds: tabsToAdd as [number, ...number[]] });
-        await browser.tabGroups.update(newGroupId, {
-          title: this.groupTitle,
-          color: this.colorForGroup(),
-        });
-        await this.setGroupId(newGroupId);
-      }
+    if (canonicalId !== null) {
+      await browser.tabs.group({ tabIds: finalTabIds as [number, ...number[]], groupId: canonicalId });
+      // (Re)apply our color only when first taking ownership of a group; once
+      // owned, leave the color alone so a manual recolor is preserved.
+      await browser.tabGroups.update(canonicalId, {
+        title: this.groupTitle,
+        ...(takingOwnership ? { color: this.colorForGroup() } : {}),
+      });
+      await this.setGroupId(canonicalId);
+    } else {
+      const newGroupId = await browser.tabs.group({ tabIds: finalTabIds as [number, ...number[]] });
+      await browser.tabGroups.update(newGroupId, {
+        title: this.groupTitle,
+        color: this.colorForGroup(),
+      });
+      await this.setGroupId(newGroupId);
     }
 
+    await this.touchLastSync();
+  }
+
+  private async touchLastSync(): Promise<void> {
     const lastSync = await storage.get('lastSync');
     lastSync[this.adapterName] = Date.now();
     await storage.set('lastSync', lastSync);
